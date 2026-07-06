@@ -15,7 +15,7 @@
       "codeLocation": "app/MyRestaurantAgent/",
       "runtimeVersion": "PYTHON_3_14",
       "networkMode": "PUBLIC",
-      "protocol": "HTTP"
+      "protocol": "AGUI"
     }
   ],
   "memories": [],

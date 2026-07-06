@@ -1,6 +1,7 @@
 from strands import Agent
 from src.agents.restaurant_agent import restaurant_agent
 
+
 MAIN_AGENT_PROMPT = """You are the Main Agent — a helpful assistant that coordinates between users and specialized sub-agents.
 
 Your capabilities:

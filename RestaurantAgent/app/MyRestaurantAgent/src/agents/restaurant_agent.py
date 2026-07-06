@@ -1,5 +1,5 @@
 from strands import Agent
-from RestaurantAgent.app.MyRestaurantAgent.src.agents.restaurant_collaborator import restaurant_collaborator
+from src.agents.restaurant_collaborator import restaurant_collaborator
 
 RESTAURANT_AGENT_PROMPT = """You are the Restaurant Agent.
 You receive requests from the Main Agent whenever a user wants help finding a restaurant.

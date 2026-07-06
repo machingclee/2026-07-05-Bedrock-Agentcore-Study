@@ -2,3 +2,12 @@ __pycache__/
 .venv/
 .DS_Store
 *.log
+
+# AgentCore — generated at deploy time, account-specific
+agentcore/.cli/
+agentcore/.cache/
+agentcore/.env.local
+
+# CDK
+agentcore/cdk/cdk.out/
+agentcore/cdk/node_modules/
