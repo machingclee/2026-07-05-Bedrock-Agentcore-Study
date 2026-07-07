@@ -15,7 +15,15 @@
       "codeLocation": "app/MyRestaurantAgent/",
       "runtimeVersion": "PYTHON_3_14",
       "networkMode": "PUBLIC",
-      "protocol": "AGUI"
+      "protocol": "AGUI",
+      "authorizerType": "CUSTOM_JWT",
+      "authorizerConfiguration": {
+        "customJwtAuthorizer": {
+          "discoveryUrl": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_uXuMtLZYF/.well-known/openid-configuration",
+          "allowedAudience": [],
+          "allowedClients": ["3h9ul8re46q87rs2nj3ajm7ds1"]
+        }
+      }
     }
   ],
   "memories": [],

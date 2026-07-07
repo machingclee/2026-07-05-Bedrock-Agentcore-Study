@@ -207,6 +207,40 @@ After deployment, the runtime ARN is available in the CLI output and in `agentco
 agentcore invoke --prompt "Find me a fine dining restaurant in Tokyo"
 ```
 
+#### Understanding CDK Asset Naming {#cdk-asset-naming}
+
+After `agentcore deploy` completes, CDK uploads our agent code to an S3 bucket with a name like `cdk-hnb659fds-assets-562976154517-us-east-1`. The zip file inside it has a name like `80461a3331ee9215d6a72fbb15b72a6ce7e31c28b45d9d41219540363d6610a6.zip`. Neither is meant to be human-readable, but both are deterministic and intentional.
+
+The S3 bucket name follows the pattern `cdk-hnb659fds-assets-ACCOUNT-REGION`. The `cdk-hnb659fds` prefix is a fixed hash derived from the CDK toolkit stack, and the suffix embeds our AWS account ID and region. Every CDK-bootstrapped account has exactly one assets bucket per region.
+
+The zip filename is the SHA256 hash of our agent code. Same code produces the same hash every deploy, which lets CDK skip re-uploading unchanged assets. Change a single line of `main.py` and the hash changes, triggering a new upload.
+
+Both artifacts are CDK internals. We never need to download, rename, or interact with them directly. If we do want to trace which S3 asset belongs to our runtime, we can query the CloudFormation stack:
+
+```bash
+aws cloudformation describe-stack-resources \
+  --stack-name AgentCore-RestaurantAgent-default \
+  --region us-east-1 \
+  --query "StackResources[?ResourceType=='AWS::BedrockAgentCore::Runtime']"
+```
+
+Or inspect the stack template to find the exact S3 key:
+
+```bash
+aws cloudformation get-template \
+  --stack-name AgentCore-RestaurantAgent-default \
+  --region us-east-1 \
+  --query "TemplateBody" --output text | python3 -c "
+import json,sys
+t = json.load(sys.stdin)
+for k,v in t['Resources'].items():
+    if 'Code' in v.get('Properties',{}):
+        print(f'{k} -> {v[\"Properties\"][\"Code\"]}')
+"
+```
+
+The identifiers we actually use day to day are the human-readable ones: the CloudFormation stack name (`AgentCore-RestaurantAgent-default`), the AgentCore Runtime ID (`RestaurantAgent_MyRestaurantAgent-dqQ1m6Bgn4`), and the runtime ARN (`arn:aws:bedrock-agentcore:us-east-1:562976154517:runtime/RestaurantAgent_MyRestaurantAgent-dqQ1m6Bgn4`). These appear in the CLI deploy output and in `agentcore/.cli/deployed-state.json`.
+
 ### The AG-UI Event Stream {#event-stream}
 
 When the frontend POSTs to `/invocations` with a `RunAgentInput` payload, the response is an SSE stream. A typical exchange for our restaurant agent looks like this:
@@ -338,7 +372,23 @@ The `selfManagedAgents` pattern means the browser talks directly to AgentCore wi
 
 #### Authentication {#authentication}
 
-AgentCore supports OAuth 2.0 bearer tokens via JWT. To enable browser-to-AgentCore calls without SigV4 signing, configure an inbound authorizer on the runtime:
+AgentCore supports OAuth 2.0 bearer tokens via JWT. To enable browser-to-AgentCore calls without SigV4 signing, we configure an inbound JWT authorizer on the runtime. The authorizer is IdP-agnostic: it works with any OIDC-compatible identity provider.
+
+The configuration requires three fields. The discovery URL tells AgentCore where to find the provider's public signing keys. The allowed audience and allowed clients tell it which tokens to accept.
+
+##### Cognito Setup {#cognito-setup}
+
+If we use Amazon Cognito as our identity provider, the three values come directly from the Cognito console.
+
+From the User Pool details page, grab the Pool ID (format: `us-east-1_xxxxxxxxx`). The discovery URL follows this pattern:
+
+```
+https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxxxxxx/.well-known/openid-configuration
+```
+
+From App Integration -> App Clients, grab the App Client ID. For Cognito, both `allowedAudience` and `allowedClients` use the same value: the App Client ID. Cognito issues the access token with the client ID as the audience claim, so a single value satisfies both checks.
+
+The complete `agentcore.json` with Cognito:
 
 ```json
 {
@@ -349,9 +399,9 @@ AgentCore supports OAuth 2.0 bearer tokens via JWT. To enable browser-to-AgentCo
       "authorizerType": "CUSTOM_JWT",
       "authorizerConfiguration": {
         "customJwtAuthorizer": {
-          "discoveryUrl": "https://your-idp.com/.well-known/openid-configuration",
-          "allowedAudience": ["your-api-audience"],
-          "allowedClients": ["your-client-id"]
+          "discoveryUrl": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxxxxxx/.well-known/openid-configuration",
+          "allowedAudience": ["abcdef1234567890"],
+          "allowedClients": ["abcdef1234567890"]
         }
       }
     }
@@ -359,9 +409,37 @@ AgentCore supports OAuth 2.0 bearer tokens via JWT. To enable browser-to-AgentCo
 }
 ```
 
-After deploying this configuration, the browser can call AgentCore with `Authorization: Bearer <jwt>`. The `HttpAgent` headers prop forwards the token automatically.
+After `agentcore deploy`, the browser passes the Cognito JWT unchanged:
 
-### Gotchas {#gotchas}
+```typescript
+import { fetchAuthSession } from "aws-amplify/auth";
+
+const session = await fetchAuthSession();
+const token = session.tokens?.accessToken?.toString();
+
+const agent = new HttpAgent({
+  url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/.../invocations",
+  headers: { Authorization: `Bearer ${token}` },
+});
+```
+
+No new credentials, no backend proxy. AgentCore fetches the public keys from Cognito's JWKS endpoint and validates the token on every request.
+
+To verify the discovery URL is correct, paste it in a browser. It should return a JSON document with `issuer`, `jwks_uri`, and `token_endpoint` fields. If it does not, check that the User Pool ID and region are correct.
+
+##### Other Identity Providers {#other-idps}
+
+The same `CUSTOM_JWT` authorizer works with any OIDC-compliant provider. The only difference is the discovery URL and which values go in `allowedAudience` and `allowedClients`.
+
+For Auth0, the discovery URL is `https://YOUR_DOMAIN.us.auth0.com/.well-known/openid-configuration`. The audience comes from the API identifier configured in the Auth0 dashboard, and the client ID comes from the Application settings.
+
+For Okta, the discovery URL is `https://YOUR_DOMAIN.okta.com/oauth2/default/.well-known/openid-configuration`. The audience comes from the Authorization Server, and the client ID from the Application's Client ID field.
+
+For a self-hosted OIDC provider such as Keycloak, the discovery URL is `https://YOUR_DOMAIN/realms/YOUR_REALM/.well-known/openid-configuration`.
+
+At least one of `allowedAudience`, `allowedClients`, `allowedScopes`, or `customClaims` is required. The authorizer validates all fields that are present, and the token must satisfy every configured condition.
+
+### Caveats {#gotchas}
 
 #### Python Version {#python-version}
 
@@ -378,6 +456,10 @@ The `selfManagedAgents` prop on CopilotKit requires an Enterprise Intelligence l
 #### CDK Bootstrap State {#cdk-bootstrap}
 
 If CDK deployment fails with a `DELETE_FAILED` or `ROLLBACK_FAILED` stack state, the `CDKToolkit` stack may be stuck. Delete it from the AWS Console or via CLI, then redeploy. The `agentcore deploy --yes` command handles bootstrap automatically for clean accounts.
+
+#### CodeZip Versus Container Build {#codezip-vs-container}
+
+After `agentcore deploy` with `"build": "CodeZip"`, no new Docker image appears in ECR. This is expected: AgentCore zips our Python code and runs it on a managed base image that AWS owns. The zip file lands in the CDK assets S3 bucket, not ECR. To use our own Docker image with a human-readable ECR repository name and image tag, switch to `"build": "Container"` in `agentcore.json`. That requires a `Dockerfile` in the code directory and the build step becomes our responsibility.
 
 ### Summary {#summary}
 

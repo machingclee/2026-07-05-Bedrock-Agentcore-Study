@@ -6,7 +6,6 @@ from ag_ui.core import RunAgentInput
 from ag_ui.encoder import EventEncoder
 from src.agents.main_agent import main_agent
 
-# Wrap the Strands agent with AG-UI protocol support
 agui_agent = StrandsAgent(
     agent=main_agent,
     name="restaurant_agent",
@@ -22,7 +21,6 @@ app = FastAPI()
 
 @app.post("/invocations")
 async def invocations(input_data: dict, request: Request):
-    """Main AG-UI endpoint that streams typed events via SSE."""
     accept_header = request.headers.get("accept")
     encoder = EventEncoder(accept=accept_header)
 
